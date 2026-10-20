@@ -1,6 +1,6 @@
 {
   "name": "pi-session-log",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "A pi extension that records a pi session in the session-log format -- the second implementation of a format two harnesses now share. Imports no dsh code and no harness code.",
   "main": "./extensions/session-log.js",
