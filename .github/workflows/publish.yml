@@ -92,7 +92,14 @@ jobs:
           # So the check is on the FILES THAT SHIP, not on the repository: a stray import in a file that is not
           # published cannot make the published package a harness plugin, and a file that IS published must not name
           # one.
-          if grep -rnE "from ['\"][^'\"]*dsh|require\(['\"][^'\"]*dsh|@deepseek-ai/" src/ extensions/ 2>/dev/null; then
+          # AND THE FORBIDDEN NAMES ARE SPELLED OUT, rather than the pattern saying "dsh". MEASURED: a pattern of
+          # `from ['\"][^'\"]*dsh` matches `from 'dsh-session-rows'` -- which is this package's own DECLARED
+          # DEPENDENCY, imported at src/rows.js -- so the check fired on the extension doing exactly the right
+          # thing, and the publish would have failed on the second implementation of the format importing the
+          # shared rules. The harness packages are named one by one instead: the observer, the store, and the
+          # harness's own scope. The pattern covers `from`, `import(` and `require`, because a dynamic import is
+          # still an import.
+          if grep -rnE "(from|import|require)\s*\(?\s*['\"][^'\"]*(dsh-system1-observer|dsh-session-index|@deepseek-ai/)" src/ extensions/ 2>/dev/null; then
             echo "::error::the published sources import a harness; the pi extension must be able to stand alone"
             exit 1
           fi
@@ -178,9 +185,14 @@ jobs:
             # the proof-of-presence has not happened yet -- the step still exits 0 and the installability check below
             # is what notices. And if it FAILS, the fallback is `npm stage publish`, which is the same publish with
             # the proof-of-presence deferred instead of demanded.
+            # AND THE STAGED FALLBACK TAKES **NO PACKAGE SPEC**. MEASURED on npm 12.2.0: with a spec, npm resolves
+            # the package FROM THE REGISTRY instead of packing the working directory, and a package that does not
+            # exist there is a 404 -- which is the one that was read as "npm cannot carry a first publish" when it
+            # was the ARGUMENT. npm 12 documents the spec-less form as packing the working directory, and as able to
+            # create a package that does not exist.
             if ! npm publish --provenance --access public --tag "$tag"; then
               echo "::notice::npm publish failed; trying the staged path, which defers the 2FA proof-of-presence"
-              npm stage publish "pi-session-log@${ver}" --tag "$tag" --provenance --access public
+              npm stage publish --tag "$tag" --provenance --access public
             fi
             echo "--- what npm holds for this version ---"
             npm stage list "pi-session-log@${ver}" 2>&1 || true
