@@ -195,7 +195,28 @@ jobs:
               npm stage publish --tag "$tag" --provenance --access public
             fi
             echo "--- what npm holds for this version ---"
-            npm stage list "pi-session-log@${ver}" 2>&1 || true
+            # AND WITHOUT A VERSION SPECIFIER, which is MEASURED: npm 12 answers
+            #   npm error code EUSAGE
+            #   npm error Version specifiers are not supported for listing staged packages
+            # for `npm stage list "<pkg>@<ver>"`. The list takes the package spec and not the version, so the
+            # filter on the version is done HERE, on the name AND the version.
+            npm stage list --json 2>/dev/null | node -e "
+              let s = ''
+              process.stdin.on('data', (c) => { s += c })
+              process.stdin.on('end', () => {
+                let ids = []
+                try {
+                  const parsed = JSON.parse(s)
+                  const list = Array.isArray(parsed) ? parsed : (parsed && parsed.staged) ? parsed.staged : []
+                  for (const entry of list) {
+                    if (!entry || !entry.id) continue
+                    const p = entry.package || entry
+                    if (p.name === 'pi-session-log' && p.version === process.argv[1]) ids.push(entry.id)
+                  }
+                } catch { /* not json: leave ids empty and let the fallback command name it */ }
+                process.stdout.write(ids[0] || '')
+              })
+            " "$ver" || true
           fi
 
       - name: Every version published must be INSTALLABLE, because a staged publish is not a release
@@ -204,9 +225,16 @@ jobs:
           ver=$(node -p "require('./package.json').version")
           # RETRY FOR MINUTES, NOT SECONDS: npm prints the SAME two lines whether it published a version that is
           # still being processed or STAGED one awaiting approval -- only the registry, plus time, can tell them
-          # apart. 13 checks over ~3 minutes covers npm's own "few minutes".
+          # apart.
+          #
+          # AND THE WINDOW IS MEASURED, NOT ASSUMED. On 2026-10-20 the credential-free publish of
+          # `dsh-session-rows@0.2.1` said "Your package is being processed and may take a few minutes to become
+          # available", and the OLD 13-check window (195 seconds) closed BEFORE the version was installable -- the
+          # version was there by 250 seconds. So the run reported a FAILURE for a release that had actually
+          # succeeded, and the check that exists to catch a staged publish caught the timing instead. 20 checks over
+          # ~5 minutes covers what npm actually took, with room for a slower registry.
           found=false
-          for attempt in $(seq 1 13); do
+          for attempt in $(seq 1 20); do
             if npm view "${name}@${ver}" version >/dev/null 2>&1; then found=true; break; fi
             sleep 15
           done
@@ -217,7 +245,7 @@ jobs:
           # MEASURED ON THE SISTER REPOSITORIES: npm's trusted-publishing flow can STAGE a release instead of
           # publishing it -- the run signs a provenance statement, the publish step exits 0, and nothing is
           # installable. A green job is then evidence of staging, not of publication.
-          echo "::error::${name}@${ver} is still not on the registry after ~3 minutes. npm accepted it and said it was 'being processed', so either the processing is unusually slow or it was STAGED; the two are indistinguishable from the CLI's output."
+          echo "::error::${name}@${ver} is still not on the registry after ~5 minutes. npm accepted it and said it was 'being processed', so either the processing is unusually slow or it was STAGED; the two are indistinguishable from the CLI's output."
           echo "::error::Approve the staged version (npm >= 12): npx npm@latest stage list && npx npm@latest stage approve <id>"
           echo "::error::Or publish directly: npmjs.com -> the package -> Trusted Publishing -> allowed action 'npm publish', then re-run this workflow."
           exit 1
