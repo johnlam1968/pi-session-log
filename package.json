@@ -39,6 +39,11 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
