@@ -1,0 +1,57 @@
+{
+  "name": "pi-session-log",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A pi extension that records a pi session in the session-log format -- the second implementation of a format two harnesses now share. Imports no dsh code and no harness code.",
+  "main": "./extensions/session-log.js",
+  "exports": {
+    ".": "./extensions/session-log.js",
+    "./package.json": "./package.json"
+  },
+  "keywords": [
+    "pi-package",
+    "session",
+    "log",
+    "format",
+    "rows",
+    "harness-free"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "coverage": "node --experimental-test-coverage --test --test-coverage-include='src/*.js' --test-coverage-include='extensions/*.js' --test-coverage-lines=85 --test-coverage-branches=75 --test-coverage-functions=75 test/*.test.js",
+    "ci": "npm test && npm run coverage"
+  },
+  "files": [
+    "extensions/**/*.js",
+    "src/**/*.js",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "dependencies": {
+    "dsh-session-rows": "^0.2.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnlam1968/pi-session-log.git"
+  },
+  "bugs": {
+    "url": "https://github.com/johnlam1968/pi-session-log/issues"
+  },
+  "homepage": "https://github.com/johnlam1968/pi-session-log#readme"
+}
