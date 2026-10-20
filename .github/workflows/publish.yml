@@ -1,0 +1,234 @@
+# WHAT A RELEASE IS, RUN BY A MACHINE.
+#
+# The shape is this account's release convention: a `v*` tag (or a manual run) publishes the package, guarded by an
+# idempotency check so a re-run after a partial failure is safe, with provenance and a GitHub Release at the end.
+#
+# FOUR DELIBERATE DIFFERENCES from the observer's `publish.yml`, each for a reason:
+#   1. Node 25.x for the SUITE, because `npm run ci` includes the coverage floor and this repository measured that
+#      floor on 25.x -- and node 26 for the PUBLISH, because npm 12 (the release that can carry a FIRST publish)
+#      declares `engines.node: ^22.22.2 || ^24.15.0 || >=26.0.0` and node 25 is not in that set. The two are
+#      separated rather than one of them compromised.
+#   2. The suite runs BEFORE publishing, so a red suite stops the release.
+#   3. The dist-tag FOLLOWS THE VERSION rather than being hard-coded: a prerelease goes to `beta` so `npm i
+#      pi-session-log` cannot pick it up, and a stable release goes to `latest`.
+#   4. ONE package, and it is a pi EXTENSION rather than a harness plugin. It has a `pi.extensions` manifest entry,
+#      a peer dependency on pi itself, and no harness code at all -- and the last of those is a RULE, not a fact
+#      about today, so it is checked at the publish rather than trusted.
+#
+# WHY TRUSTED PUBLISHING AND NOT A TOKEN. npm is deprecating the tokens that bypass 2FA: account changes in August
+# 2026 and DIRECT PUBLISHING in January 2027. A long-lived token that can publish is a credential that outlives its
+# own reason to exist. Trusted publishing -- the OIDC exchange this workflow uses -- stores NO secret: the job proves
+# who it is to npm and npm decides whether that is allowed. It is the path the other three repositories in this
+# account already use, so it is the MEASURED path for this account and not a guess.
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish pi-session-log
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '25.x'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Print the version being published
+        run: |
+          name=$(node -p "require('./package.json').name")
+          ver=$(node -p "require('./package.json').version")
+          echo "  ${name}@${ver}"
+
+      - name: The manifest has a valid semver version
+        run: |
+          name=$(node -p "require('./package.json').name")
+          ver=$(node -p "require('./package.json').version")
+          if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+            echo "::error::${name} has invalid version: ${ver}"
+            exit 1
+          fi
+
+      - name: npm must be new enough for the OIDC exchange
+        run: |
+          # Trusted publishing uses npm's OIDC exchange, which does not exist before 11.5.
+          ver=$(npm --version)
+          major=${ver%%.*}; rest=${ver#*.}; minor=${rest%%.*}
+          if [ "$major" -lt 11 ] || { [ "$major" -eq 11 ] && [ "$minor" -lt 5 ]; }; then
+            echo "::error::npm $ver is too old for trusted publishing; needs >= 11.5"
+            exit 1
+          fi
+          echo "npm $ver supports the OIDC exchange"
+
+      - name: Install from the lockfile
+        run: npm ci
+
+      - name: The suite and every gate
+        run: npm run ci
+
+      - name: The extension must not import a harness
+        run: |
+          # THE RULE THIS REPOSITORY EXISTS TO KEEP: the pi extension is the SECOND IMPLEMENTATION of the session-log
+          # format, and it must not be able to reach into the first one. A pi producer that imported dsh code would
+          # not be a second implementation -- it would be a dsh plugin with a pi hat on, and the whole point of
+          # moving the format out of one harness is that the next substrate does not inherit the first one.
+          #
+          # So the check is on the FILES THAT SHIP, not on the repository: a stray import in a file that is not
+          # published cannot make the published package a harness plugin, and a file that IS published must not name
+          # one.
+          if grep -rnE "from ['\"][^'\"]*dsh|require\(['\"][^'\"]*dsh|@deepseek-ai/" src/ extensions/ 2>/dev/null; then
+            echo "::error::the published sources import a harness; the pi extension must be able to stand alone"
+            exit 1
+          fi
+          echo "the published sources name no harness"
+
+      - name: The tarball must carry what pi loads
+        run: |
+          # A pi package is loaded THROUGH ITS MANIFEST: pi reads `pi.extensions` and loads what it names. So a
+          # tarball that does not carry that path installs and loads NOTHING, and the failure is a pi session with
+          # no log rather than an error anybody can read. `files` is a whitelist, so a mistake in it DROPS a file
+          # silently, which is exactly the shape of this failure.
+          npm pack --dry-run 2>&1 | tee /tmp/pack.txt
+          for want in extensions/session-log.js src/pi-log.js src/rows.js package.json README.md LICENSE; do
+            if ! grep -q " $want$" /tmp/pack.txt; then
+              echo "::error::the tarball does not carry ${want}"
+              exit 1
+            fi
+          done
+          # AND THE MANIFEST'S OWN POINTER MUST RESOLVE INSIDE THE TARBALL: `pi.extensions` names a DIRECTORY, and
+          # pi loads the extensions in it.
+          node --input-type=module -e "
+            import { readFileSync } from 'node:fs'
+            const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+            const list = pkg.pi && pkg.pi.extensions
+            if (!Array.isArray(list) || list.length === 0) {
+              console.error('::error::the manifest names no pi.extensions')
+              process.exit(1)
+            }
+            for (const entry of list) {
+              const rel = entry.replace(/^\.\//, '')
+              if (!readFileSync('/tmp/pack.txt', 'utf8').includes(' ' + rel + '/')) {
+                console.error('::error::pi.extensions names ' + entry + ' and the tarball carries no such directory')
+                process.exit(1)
+              }
+            }
+            console.log('pi.extensions names ' + list.join(', ') + ' and the tarball carries it')
+          "
+          if grep -qE "test/|package-lock" /tmp/pack.txt; then
+            echo "::error::the tarball carries a file the package does not publish"
+            exit 1
+          fi
+          echo "the tarball carries exactly the extension and what it needs"
+
+      - name: Switch to a node that npm 12 supports
+        uses: actions/setup-node@v4
+        with:
+          # THE PUBLISH RUNS ON A DIFFERENT NODE FROM THE SUITE. npm 12.2.0 declares
+          # `engines.node: ^22.22.2 || ^24.15.0 || >=26.0.0` -- node 25 is NOT in that set -- and node 25 is what
+          # this repository measures its coverage floor on. The suite runs where the floor was measured; the
+          # publish runs where npm 12 can be installed at all.
+          node-version: '26'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: npm must be 12, because npm 11 cannot publish a package that does not exist yet
+        run: |
+          # MEASURED ON dsh-session-rows, 2026-10-20: with npm 11 the OIDC publish of a package that is not on the
+          # registry yet fails with
+          #   npm error code E404
+          #   npm error 404 Not Found - PUT https://registry.npmjs.org/<name> - Not found
+          # which is npm saying that there is no trusted publisher for a package it has never heard of: the
+          # trusted-publisher configuration LIVES on the package's page, so a package that does not exist has no
+          # configuration to find. npm 12 is the release that added `npm stage`, which defers the 2FA
+          # proof-of-presence to a later step, and it is the release that can carry a FIRST publish.
+          npm install -g npm@latest
+          ver=$(npm --version)
+          major=${ver%%.*}
+          if [ "$major" -lt 12 ]; then
+            echo "::error::npm $ver is too old to stage a first publish; needs >= 12"
+            exit 1
+          fi
+          echo "npm $ver can carry a first publish"
+
+      - name: Publish pi-session-log
+        run: |
+          ver=$(node -p "require('./package.json').version")
+          if npm view "pi-session-log@${ver}" version >/dev/null 2>&1; then
+            echo "::notice::pi-session-log@${ver} already on npm, skipping"
+          else
+            if [[ "$ver" == *-* ]]; then tag=beta; else tag=latest; fi
+            echo "publishing ${ver} with dist-tag ${tag}"
+            # `npm publish` first. If npm STAGES it instead of publishing it -- which is what the 2FA flow does when
+            # the proof-of-presence has not happened yet -- the step still exits 0 and the installability check below
+            # is what notices. And if it FAILS, the fallback is `npm stage publish`, which is the same publish with
+            # the proof-of-presence deferred instead of demanded.
+            if ! npm publish --provenance --access public --tag "$tag"; then
+              echo "::notice::npm publish failed; trying the staged path, which defers the 2FA proof-of-presence"
+              npm stage publish "pi-session-log@${ver}" --tag "$tag" --provenance --access public
+            fi
+            echo "--- what npm holds for this version ---"
+            npm stage list "pi-session-log@${ver}" 2>&1 || true
+          fi
+
+      - name: Every version published must be INSTALLABLE, because a staged publish is not a release
+        run: |
+          name=$(node -p "require('./package.json').name")
+          ver=$(node -p "require('./package.json').version")
+          # RETRY FOR MINUTES, NOT SECONDS: npm prints the SAME two lines whether it published a version that is
+          # still being processed or STAGED one awaiting approval -- only the registry, plus time, can tell them
+          # apart. 13 checks over ~3 minutes covers npm's own "few minutes".
+          found=false
+          for attempt in $(seq 1 13); do
+            if npm view "${name}@${ver}" version >/dev/null 2>&1; then found=true; break; fi
+            sleep 15
+          done
+          if [ "$found" = true ]; then
+            echo "installable: ${name}@${ver}"
+            exit 0
+          fi
+          # MEASURED ON THE SISTER REPOSITORIES: npm's trusted-publishing flow can STAGE a release instead of
+          # publishing it -- the run signs a provenance statement, the publish step exits 0, and nothing is
+          # installable. A green job is then evidence of staging, not of publication.
+          echo "::error::${name}@${ver} is still not on the registry after ~3 minutes. npm accepted it and said it was 'being processed', so either the processing is unusually slow or it was STAGED; the two are indistinguishable from the CLI's output."
+          echo "::error::Approve the staged version (npm >= 12): npx npm@latest stage list && npx npm@latest stage approve <id>"
+          echo "::error::Or publish directly: npmjs.com -> the package -> Trusted Publishing -> allowed action 'npm publish', then re-run this workflow."
+          exit 1
+
+      - name: A prerelease must not be `latest` once a stable version exists
+        run: |
+          ver=$(node -p "require('./package.json').version")
+          pkg=$(node -p "require('./package.json').name")
+          latest=$(npm view "$pkg" dist-tags.latest 2>/dev/null || echo '')
+          if [ "$latest" != "$ver" ] || [[ "$ver" != *-* ]]; then
+            echo "tag check ok: latest=${latest:-<none>} (this release is $ver)"
+            exit 0
+          fi
+          stable=$(npm view "$pkg" versions --json 2>/dev/null | tr -d '[]" ' | tr ',' '\n' | grep -c -v -- '-' || true)
+          if [ "${stable:-0}" -gt 0 ]; then
+            echo "::error::$ver is a PRERELEASE on the \`latest\` tag while $stable stable version(s) exist, so \`npm i $pkg\` installs a beta. Move it: npm dist-tag add $pkg@<stable> latest"
+            exit 1
+          fi
+          echo "::warning::$ver is on \`latest\` because it is the only version published; npm does this for a first release. Publish a stable version to move it."
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
