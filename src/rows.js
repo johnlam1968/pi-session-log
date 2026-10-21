@@ -3,7 +3,7 @@
 // WHY THIS FILE IS NOT A COPY OF THE OBSERVER'S PRODUCER. The observer has one (`dsh-system1-observer`,
 // `dsh/normalize.js`) and it reads a dsh log. This one reads ANY log in the format -- a dsh log, a pi log, whatever
 // comes next -- because that is the point of the format being a floor rather than a dsh shape. What it does NOT do
-// is say the rules again: every rule it obeys is imported from `dsh-session-rows`, which is the shared half.
+// is say the rules again: every rule it obeys is imported from `system1-measure/rules`, which is the shared half.
 //
 // THE RULES, AND WHERE EACH ONE COMES FROM, so a reader can check that none of them was restated here:
 //   * the text rule, the reasoning rule and the NUL rule -- `visibleText`, `reasoningText`, `withoutNuls`;
@@ -30,7 +30,7 @@ import {
     surfaceEvents,
     visibleText,
     withoutNuls,
-} from 'dsh-session-rows'
+} from 'system1-measure/rules'
 
 /** The record names of the format. */
 const RECORD = Object.freeze({

@@ -1,6 +1,6 @@
 // THE CONFORMANCE FIXTURE, and this producer is checked against it.
 //
-// WHY A FIXTURE AND NOT A CORPUS. The rules are said ONCE, in the package `dsh-session-rows`, and the FIXTURE says
+// WHY A FIXTURE AND NOT A CORPUS. The rules are said ONCE, in the package `system1-measure/rules`, and the FIXTURE says
 // what they produce. This repository vendors the fixture and pins its digest, so a fixture that changes in the
 // package cannot be quietly different here.
 //
