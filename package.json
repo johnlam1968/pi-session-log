@@ -34,7 +34,7 @@
     "package.json"
   ],
   "dependencies": {
-    "system1-measure": "github:johnlam1968/system1-measure#v0.1.0"
+    "system1-measure": "https://github.com/johnlam1968/system1-measure/releases/download/v0.1.1/system1-measure-0.1.1.tgz"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
